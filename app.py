@@ -1,45 +1,44 @@
 import streamlit as st
-import streamlit_authenticator as stauth
 import numpy as np
 from PIL import Image
 from googletrans import Translator
 from tensorflow.keras.models import load_model
 from tensorflow.keras.layers import Dense
 from datetime import datetime
+import gdown, os, json, tempfile
+from gtts import gTTS
 
 # -------------------------------
-# 1. Credentials Setup
+# CONFIG
 # -------------------------------
-if 'credentials' not in st.session_state:
-    passwords = ["123", "admin123"]
+DB_FILE = "users.json"
+MODEL_PATH = "plant_disease_prediction_model.h5"
 
-    # ✅ NEW hashing method
-    hashed_passwords = [stauth.Hasher().hash(pw) for pw in passwords]
+# -------------------------------
+# DATABASE
+# -------------------------------
+def load_users():
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "r") as f:
+            return json.load(f)
+    return {}
 
-    st.session_state['credentials'] = {
-        "usernames": {
-            "farmer1": {
-                "name": "Farmer1",
-                "password": hashed_passwords[0],
-                "city": "Hyderabad",
-                "phone": "9876543210",
-                "roles": ["viewer"]
-            },
-            "admin1": {
-                "name": "Admin1",
-                "password": hashed_passwords[1],
-                "city": "HQ",
-                "phone": "9999999999",
-                "roles": ["admin"]
-            }
-        }
+def save_users(data):
+    with open(DB_FILE, "w") as f:
+        json.dump(data, f)
+
+users = load_users()
+
+# Default users
+if not users:
+    users = {
+        "farmer1": {"name": "Farmer1", "password": "123", "city": "Hyderabad", "phone": "9876543210"},
+        "admin1": {"name": "Admin1", "password": "admin123", "city": "HQ", "phone": "9999999999"}
     }
-
-if 'notifications' not in st.session_state:
-    st.session_state['notifications'] = []
+    save_users(users)
 
 # -------------------------------
-# 2. Load Model
+# MODEL
 # -------------------------------
 @st.cache_resource
 def load_model_file():
@@ -48,161 +47,173 @@ def load_model_file():
             kwargs.pop('quantization_config', None)
             super().__init__(*args, **kwargs)
 
-    try:
-        return load_model(
-            "plant_disease_prediction_model.h5",
-            compile=False,
-            custom_objects={"Dense": FixedDense}
-        )
-    except:
-        return None
+    if not os.path.exists(MODEL_PATH):
+        file_id = "YOUR_FILE_ID_HERE"
+        url = f"https://drive.google.com/uc?id={file_id}"
+        gdown.download(url, MODEL_PATH, quiet=False)
+
+    return load_model(MODEL_PATH, compile=False, custom_objects={"Dense": FixedDense})
 
 # -------------------------------
-# 3. UI Setup
+# VOICE (WORKS IN CLOUD)
+# -------------------------------
+def speak(text, lang="en"):
+    try:
+        tts = gTTS(text=text, lang=lang)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
+            tts.save(fp.name)
+            st.audio(fp.name)
+    except:
+        st.warning("Voice not supported for this language")
+
+# -------------------------------
+# UI
 # -------------------------------
 st.set_page_config(page_title="🌽 Maize Care AI", layout="wide")
 
-authenticator = stauth.Authenticate(
-    st.session_state['credentials'],
-    "maize_cookie",
-    "secure_key",
-    30
-)
+st.markdown("""
+<style>
+.stButton>button {
+    background-color:#4CAF50;
+    color:white;
+    border-radius:10px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
 
 # -------------------------------
-# 4. Login & Register
+# LOGIN / REGISTER
 # -------------------------------
-if not st.session_state.get("authentication_status"):
+if not st.session_state.logged_in:
 
-    st.title("🌽 Smart Maize AI Dashboard")
+    st.title("🌽 Smart Maize AI System")
+    st.caption("AI-powered crop disease detection for farmers")
 
     tab1, tab2 = st.tabs(["Login", "Register"])
 
-    # -------- LOGIN --------
+    # LOGIN
     with tab1:
-        authenticator.login(location="main")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
 
-        if st.session_state.get("authentication_status") is False:
-            st.error("Invalid username or password")
-        elif st.session_state.get("authentication_status") is None:
-            st.warning("Enter login details")
+        if st.button("Login"):
+            if username in users and users[username]["password"] == password:
+                st.session_state.logged_in = True
+                st.session_state.username = username
+                st.success("Login successful")
+                st.rerun()
+            else:
+                st.error("Invalid credentials")
 
-    # -------- REGISTER --------
+    # REGISTER
     with tab2:
-        st.subheader("Register New Farmer")
-
-        new_user = st.text_input("Username")
+        new_user = st.text_input("New Username")
         new_name = st.text_input("Full Name")
-        new_pw = st.text_input("Password", type="password")
+        new_pw = st.text_input("New Password", type="password")
         new_city = st.text_input("City")
         new_phone = st.text_input("Phone")
 
         if st.button("Register"):
             if new_user and new_pw:
-                # ✅ hashing fixed
-                hashed_pw = stauth.Hasher().hash(new_pw)
-
-                st.session_state['credentials']['usernames'][new_user] = {
+                users[new_user] = {
                     "name": new_name,
-                    "password": hashed_pw,
+                    "password": new_pw,
                     "city": new_city,
-                    "phone": new_phone,
-                    "roles": ["viewer"]
+                    "phone": new_phone
                 }
-
-                st.success("Registration successful! Please login.")
+                save_users(users)
+                st.success("Registered successfully!")
             else:
-                st.error("Username & Password required")
+                st.error("Fill all fields")
 
 # -------------------------------
-# 5. MAIN APP
+# MAIN APP
 # -------------------------------
-if st.session_state.get("authentication_status"):
-
-    authenticator.logout(location="sidebar")
-
-    username = st.session_state.get("username")
-    user_info = st.session_state['credentials']['usernames'].get(username, {})
-    roles = user_info.get("roles", [])
+else:
+    username = st.session_state.username
+    user = users[username]
 
     # Sidebar
     st.sidebar.title("👨‍🌾 Profile")
-    st.sidebar.write(f"Name: {st.session_state.get('name')}")
-    st.sidebar.write(f"City: {user_info.get('city')}")
-    st.sidebar.write(f"Phone: {user_info.get('phone')}")
+    st.sidebar.write(f"Name: {user['name']}")
+    st.sidebar.write(f"City: {user['city']}")
+    st.sidebar.write(f"Phone: {user['phone']}")
+
+    if st.sidebar.button("Logout"):
+        st.session_state.logged_in = False
+        st.rerun()
 
     # Language
-    languages = {"English": "en", "Telugu": "te", "Hindi": "hi", "Tamil": "ta"}
-    lang = st.sidebar.selectbox("Language", list(languages.keys()))
-    lang_code = languages[lang]
+    languages = {
+        "English": "en",
+        "Telugu": "te",
+        "Hindi": "hi",
+        "Tamil": "ta"
+    }
+    lang_name = st.sidebar.selectbox("🌐 Language", list(languages.keys()))
+    lang_code = languages[lang_name]
 
-    st.title("🌽 Maize Care Dashboard")
+    st.title("🌽 Maize Disease Detection")
 
-    option = st.radio(
-        "Choose Service",
-        ["Disease Detection", "Notifications"],
-        horizontal=True
-    )
+    option = st.radio("Choose", ["Detection", "Notifications"], horizontal=True)
 
     model = load_model_file()
     translator = Translator()
 
-    # -------------------------------
-    # Disease Detection
-    # -------------------------------
-    if option == "Disease Detection":
-        st.subheader("📸 Upload Leaf Image")
-
-        file = st.file_uploader("Upload Image", type=["jpg", "png", "jpeg"])
-
-        if file:
-            img = Image.open(file)
-            st.image(img, use_container_width=True)
-
-            if st.button("Predict"):
-                if model:
-                    img = img.resize((224, 224))
-                    arr = np.array(img) / 255.0
-                    arr = np.expand_dims(arr, axis=0)
-
-                    pred = model.predict(arr)
-                    classes = ["Healthy", "Rust", "Leaf Spot", "Blight"]
-                    result = classes[np.argmax(pred)]
-
-                    text = f"Prediction: {result}"
-                    translated = translator.translate(text, dest=lang_code).text
-
-                    st.success(translated)
-
-                    # Save notification
-                    now = datetime.now().strftime("%I:%M %p")
-                    st.session_state['notifications'].append({
-                        "time": now,
-                        "msg": f"{username} detected {result}"
-                    })
-                else:
-                    st.error("Model file missing")
+    if "notifications" not in st.session_state:
+        st.session_state.notifications = []
 
     # -------------------------------
-    # Notifications
+    # DETECTION
     # -------------------------------
-    elif option == "Notifications":
-        st.subheader("📢 Notifications")
+    if option == "Detection":
 
-        if "admin" in roles:
-            msg = st.text_area("Send notification")
+        col1, col2 = st.columns(2)
 
+        with col1:
+            file = st.file_uploader("Upload Leaf Image")
+
+        with col2:
+            if file:
+                img = Image.open(file)
+                st.image(img)
+
+        if st.button("Predict"):
+            if file:
+                img = img.resize((224,224))
+                arr = np.array(img)/255.0
+                arr = np.expand_dims(arr,0)
+
+                pred = model.predict(arr)
+                classes = ["Healthy","Rust","Leaf Spot","Blight"]
+                result = classes[np.argmax(pred)]
+
+                text = f"Prediction: {result}"
+
+                # 🌐 Translate
+                translated = translator.translate(text, dest=lang_code).text
+
+                st.success(translated)
+
+                # 🔊 Voice output
+                speak(translated, lang_code)
+
+                # Save notification
+                st.session_state.notifications.append(
+                    f"{datetime.now().strftime('%H:%M')} - {username}: {result}"
+                )
+
+    # -------------------------------
+    # NOTIFICATIONS
+    # -------------------------------
+    else:
+        if username == "admin1":
+            msg = st.text_input("Send notification")
             if st.button("Send"):
-                if msg:
-                    now = datetime.now().strftime("%I:%M %p")
-                    st.session_state['notifications'].append({
-                        "time": now,
-                        "msg": msg
-                    })
-                    st.success("Notification sent")
+                st.session_state.notifications.append(msg)
 
-        if st.session_state['notifications']:
-            for n in reversed(st.session_state['notifications']):
-                st.info(f"[{n['time']}] {n['msg']}")
-        else:
-            st.write("No notifications yet")
+        for n in reversed(st.session_state.notifications):
+            st.info(n)
